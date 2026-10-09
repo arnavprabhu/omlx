@@ -1,3 +1,10 @@
+# Qwen3-ASR audio quantization tests
+
+Run `python -m pytest -q tests/test_qwen3_asr_quantization.py tests/test_audio_stt.py`
+to check Qwen3-ASR audio quantization. Small local checkpoints cover mixed 4-bit
+text and 8-bit audio weights, floating-point audio layers, and both quantization
+config keys through the STT loader. No model download is required.
+
 # Cluster test filesystem isolation
 
 The autouse `cluster_home` fixture gives each test a temporary directory for cluster interpreter shims and SSH files. It preserves explicit shim `home` arguments and leaves `HOME` unchanged so model discovery paths still work. The shim unit tests import the original function directly and provide their own temporary paths or patch `HOME` to verify the real default-path behavior.

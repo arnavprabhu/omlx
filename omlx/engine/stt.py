@@ -564,6 +564,9 @@ class STTEngine(BaseNonStreamingEngine):
         model_name = self._model_name
 
         def _load_sync():
+            from ..patches.mlx_audio_compat import ensure_qwen3_asr_audio_quantization
+
+            ensure_qwen3_asr_audio_quantization()
             # load_model returns a single nn.Module, not a tuple
             return _load_model(model_name)
 
