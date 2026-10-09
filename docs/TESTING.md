@@ -1,10 +1,3 @@
-# Prefill pause usage tests
-
-Run `python -m pytest -q tests/test_scheduler_prefill_eviction_progress.py`
-to check usage after prefill pauses. Cold and warm requests retain token progress
-across repeated pauses, report only restored prefix tokens as cached, and include
-locally computed tokens in prompt throughput. Cold retries clear the pause counter.
-
 # Cluster test filesystem isolation
 
 The autouse `cluster_home` fixture gives each test a temporary directory for cluster interpreter shims and SSH files. It preserves explicit shim `home` arguments and leaves `HOME` unchanged so model discovery paths still work. The shim unit tests import the original function directly and provide their own temporary paths or patch `HOME` to verify the real default-path behavior.
@@ -86,6 +79,11 @@ Run `python -m pytest -q tests/test_qwen4_verify_attention_rows.py` to check tha
 `test_mlx_vlm_qwen4_exp_compat.py::test_qwen4_mtp_one_row_step_is_the_serial_decode_step` checks that a one-row Lightning MTP window (the activation step and depth-0 cycles) runs the serial decode step: equal logits and cache state, no speculative transaction, and a following verify window that rolls back as usual. `OMLX_QWEN4_MTP_ONE_ROW_DECODE=0` keeps the verify forward for those windows.
 
 # Prefill memory accounting tests
+
+Run `python -m pytest -q tests/test_scheduler_prefill_eviction_progress.py`
+to check usage after prefill pauses. Cold and warm requests retain token progress
+across repeated pauses, report only restored prefix tokens as cached, and include
+locally computed tokens in prompt throughput. Cold retries clear the pause counter.
 
 `python -m pytest -q tests/test_engine_preflight.py` checks route admission after eviction or reclaim. Both batched wrappers must refresh their cached MLX sample on the owning executor, including when the pool reports that no action was necessary. Controlled memory readings cover newly available headroom, insufficient headroom, and requests that already fit without executor work.
 
