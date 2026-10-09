@@ -1,3 +1,10 @@
+# Prefill pause usage tests
+
+Run `python -m pytest -q tests/test_scheduler_prefill_eviction_progress.py`
+to check usage after prefill pauses. Cold and warm requests retain token progress
+across repeated pauses, report only restored prefix tokens as cached, and include
+locally computed tokens in prompt throughput. Cold retries clear the pause counter.
+
 # Cluster test filesystem isolation
 
 The autouse `cluster_home` fixture gives each test a temporary directory for cluster interpreter shims and SSH files. It preserves explicit shim `home` arguments and leaves `HOME` unchanged so model discovery paths still work. The shim unit tests import the original function directly and provide their own temporary paths or patch `HOME` to verify the real default-path behavior.
