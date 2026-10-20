@@ -8130,7 +8130,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
         gguf_info = gguf.source_info(info["model_path"]) or {}
         folder = Path(gguf_info.get("directory") or source.parent)
         parts = gguf_info.get("source_parts") or gguf_info.get("parts") or []
-        registered.update(folder / name for name in parts)
+        registered.update((folder / name).resolve() for name in parts)
         models.append(
             {
                 "name": info["id"],
@@ -8156,7 +8156,7 @@ async def list_hf_models(is_admin: bool = Depends(require_admin)):
         stranded = [
             path
             for path in folder.rglob("*.gguf")
-            if path not in registered
+            if path.resolve() not in registered
             and not (path.parent == folder and gguf.file_kind(path.name) != "gguf")
         ]
         if stranded and name not in seen_names:

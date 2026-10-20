@@ -1951,9 +1951,9 @@ class TestHFDownloaderRoutes:
             assert not (models_dir / "unsloth").exists()
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("cached", [False, True])
+    @pytest.mark.parametrize("cached, aliased", [(False, False), (True, False), (False, True)])
     async def test_split_variant_delete_preserves_other_variants(
-        self, tmp_path, write_gguf, cached
+        self, tmp_path, write_gguf, cached, aliased
     ):
         models_dir = tmp_path / "models"
         if cached:
@@ -1970,6 +1970,12 @@ class TestHFDownloaderRoutes:
                     {"general.architecture": "qwen4exp"},
                 )
         write_gguf(folder / "mmproj-BF16.gguf", {"general.architecture": "clip"})
+        if aliased:
+            from omlx.model_discovery import discover_models
+
+            alias = tmp_path / "model-link"
+            alias.symlink_to(models_dir, target_is_directory=True)
+            discover_models(alias, tmp_path / "base" / "gguf")
         pool = EnginePool()
         settings = MagicMock()
         settings.get_effective_model_dirs.return_value = [models_dir]
@@ -1999,7 +2005,7 @@ class TestHFDownloaderRoutes:
             assert set(pool._entries) == {"Flash-Next-Q4_K_M"}
             if not cached:
                 downloader.cancel_download_for_dir.assert_awaited_once_with(
-                    folder,
+                    alias / folder.relative_to(models_dir) if aliased else folder,
                     [
                         f"Q2_0/Flash-Next-Q2_0-{part:05d}-of-00002.gguf"
                         for part in (1, 2)
