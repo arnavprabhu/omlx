@@ -532,6 +532,67 @@ class TestCompatibility:
         _, reason = resolve_splash_target(model, None, [])
         assert "tokenizer.json" in reason
 
+    def test_qwen35_122b_checkpoint_needs_splash_1_4_1_and_its_draft(
+        self, tmp_path, launchers
+    ):
+        text = dict(splash_mod.SPLASH_FAMILIES["Qwen3.5-122B-A10B"])
+        model = _write_model(tmp_path / "Ornith-1.5-122B-MLX-4bit", text)
+        config = json.loads((model / "config.json").read_text())
+        vision = {"patch_size": 16, "temporal_patch_size": 2, "spatial_merge_size": 2}
+        config.update(model_type="qwen3_5_moe", vision_config=vision)
+        (model / "config.json").write_text(json.dumps(config))
+        moe_35b = _write_draft(
+            tmp_path / "Qwen3.6-35B-A3B-DFlash2",
+            splash_mod.SPLASH_FAMILIES["Qwen3.6-35B-A3B"],
+        )
+        draft = _write_draft(tmp_path / "incoai" / "Ornith-1.5-122B-DFlash2", text)
+
+        launchers("splash", version="1.4.0")
+        target, reason = resolve_splash_target(model, None, [str(draft)])
+        assert target is None
+        assert reason == "Qwen3.5-122B-A10B needs Splash 1.4.1 or later"
+        assert splash_mod.splash_draft_to_download(model, None, []) is None
+
+        launchers("splash", version="1.4.1")
+        assert (
+            splash_mod.splash_draft_to_download(model, None, [str(moe_35b)])
+            == "incoai/Ornith-1.5-122B-DFlash2"
+        )
+        target, reason = resolve_splash_target(model, None, [str(moe_35b), str(draft)])
+        assert reason == ""
+        assert target.family == "Qwen3.5-122B-A10B"
+        assert target.draft_path == draft
+        assert splash_mod.splash_has_vision(config)
+
+    def test_flint_mlx_checkpoint_explains_gguf_requirement(self, tmp_path, launchers):
+        # Flint's own config.json is flat: no text_config.
+        model = tmp_path / "flint-4bit"
+        _write_model(model)
+        config = {
+            **splash_mod.SPLASH_FAMILIES["Flint"],
+            "quantization": MLX_4BIT,
+        }
+        (model / "config.json").write_text(json.dumps(config))
+
+        launchers("splash", version="1.4.0")
+        _, reason = resolve_splash_target(model, None, [])
+        assert reason == "Flint needs Splash 1.4.1 or later"
+        launchers("splash", version="1.4.1")
+        _, reason = resolve_splash_target(model, None, [])
+        assert reason == "Flint needs a GGUF; Splash cannot load its MLX checkpoints"
+        assert splash_mod.splash_draft_to_download(model, None, []) is None
+
+    def test_pruned_mlx_checkpoint_explains_the_expert_count(self, tmp_path, launchers):
+        launchers("splash", version="1.4.1")
+        text = {**splash_mod.SPLASH_FAMILIES["Qwen3.6-35B-A3B"], "num_experts": 128}
+        model = _write_model(tmp_path / "Qwen3.6-35B-A3B-REAP-4bit", text)
+
+        _, reason = resolve_splash_target(model, None, [])
+
+        assert reason == (
+            "Splash serves Qwen3.6-35B-A3B MLX checkpoints with all 256 routed experts"
+        )
+
 
 # -- staging --------------------------------------------------------------------------
 
@@ -715,6 +776,166 @@ class TestGguf:
         assert tokenizer.decode(tokenizer.encode(prompt)) == prompt
         assert tokenizer.encode("<|im_end|>") == [vocab.index("<|im_end|>")]
         assert tokenizer.eos_token == "<|im_end|>"
+
+    def test_flint_gguf_serves_text_only_on_splash_1_4_1(
+        self, tmp_path, monkeypatch, launchers, write_gguf
+    ):
+        alphabet = sorted(pre_tokenizers.ByteLevel.alphabet())
+        specials = ["<|end_of_text|>", "<|user|>", "<|assistant|>"]
+        vocab = alphabet + specials
+        monkeypatch.setitem(
+            splash_mod.SPLASH_FAMILIES["Flint"], "vocab_size", len(vocab)
+        )
+        # Layers 0, 1, 48 and every fourth from 5 attend every key; the rest
+        # slide over 513 tokens.
+        sliding = [2 <= layer < 48 and layer % 4 != 1 for layer in range(49)]
+        metadata = {
+            "general.architecture": "flint",
+            "flint.block_count": 49,
+            "flint.context_length": 262144,
+            "flint.embedding_length": 2048,
+            "flint.attention.head_count": 32,
+            "flint.attention.head_count_kv": 4,
+            "flint.attention.key_length": 128,
+            "flint.expert_count": 256,
+            "flint.expert_used_count": 6,
+            "flint.expert_weights_norm": True,
+            "flint.attention.sliding_window": 513,
+            "flint.attention.sliding_window_pattern": sliding,
+            "tokenizer.ggml.model": "gpt2",
+            "tokenizer.ggml.pre": "flint",
+            "tokenizer.ggml.tokens": vocab,
+            "tokenizer.ggml.token_type": [3 if t in specials else 1 for t in vocab],
+            "tokenizer.ggml.merges": [],
+            "tokenizer.ggml.eos_token_id": vocab.index("<|end_of_text|>"),
+            "tokenizer.chat_template": (
+                "{% for m in messages %}<|{{ m.role }}|>{{ m.content }}{% endfor %}"
+                "{% if add_generation_prompt %}<|assistant|>{% endif %}"
+            ),
+        }
+        repo = tmp_path / "models" / "unsloth" / "flint-GGUF"
+        write_gguf(repo / "flint-UD-Q4_K_XL.gguf", metadata, size=4096)
+        # A projector beside it does not give Flint a vision tower.
+        write_gguf(repo / "mmproj-BF16.gguf", {"general.architecture": "clip"}, 512)
+        text = {**splash_mod.SPLASH_FAMILIES["Flint"], "vocab_size": len(vocab)}
+        draft = _write_draft(tmp_path / "models" / "incoai" / "Flint-DFlash2", text)
+
+        models = discover_models(tmp_path / "models", tmp_path / "gguf")
+        folder = Path(models["flint-UD-Q4_K_XL"].model_path)
+        config = json.loads((folder / "config.json").read_text())
+        assert config["model_type"] == "flint"
+        assert config["text_config"]["sliding_window"] == 513
+        layer_types = config["text_config"]["layer_types"]
+        assert layer_types.count("full_attention") == 14
+        assert layer_types.count("sliding_attention") == 35
+
+        launchers("splash", version="1.4.0")
+        _, reason = resolve_splash_target(folder, None, [str(draft)])
+        assert reason == "Flint needs Splash 1.4.1 or later"
+        launchers("splash", version="1.4.1")
+        assert (
+            splash_mod.splash_draft_to_download(folder, None, [])
+            == "incoai/Flint-DFlash2"
+        )
+        target, reason = resolve_splash_target(folder, None, [str(draft)])
+        assert reason == ""
+        assert target.family == "Flint"
+
+        engine = SplashEngine(
+            model_name=str(folder),
+            model_id="flint-UD-Q4_K_XL",
+            target=target,
+            hub_dir=tmp_path / "hub",
+            log_dir=tmp_path / "logs",
+            options=SplashOptions(),
+        )
+        assert engine.accepts_image_input is False
+        assert "--language-only" in engine._serve_command(9000)
+        gguf_bytes = (repo / "flint-UD-Q4_K_XL.gguf").stat().st_size
+        assert splash_mod._weight_bytes(folder) == gguf_bytes
+        # Only the 14 full-attention layers' KV grows with the context.
+        kv_per_token = 14 * 2 * 4 * 128
+        kv_per_token += kv_per_token // 64
+        fixed = (
+            splash_mod._weight_bytes(folder)
+            + int(splash_mod._safetensors_bytes(draft) * splash_mod._DRAFT_LOAD_RATIO)
+            + splash_mod._RUNTIME_RESERVE_BYTES
+        )
+        estimate = splash_memory_estimate(folder, draft, 262144, "int8")
+        assert estimate == fixed + kv_per_token * 262144
+
+        # The tokenizer splits text as Flint's own does: digits in runs of up
+        # to three, and no NFC normalization.
+        tokenizer = AutoTokenizer.from_pretrained(folder)
+        backend = tokenizer.backend_tokenizer
+        assert backend.normalizer is None
+        pieces = [
+            piece for piece, _ in backend.pre_tokenizer.pre_tokenize_str("1234567")
+        ]
+        assert pieces == ["123", "456", "7"]
+        prompt = tokenizer.apply_chat_template(
+            [{"role": "user", "content": "hi"}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+        assert prompt == "<|user|>hi<|assistant|>"
+        assert tokenizer.encode("<|assistant|>") == [vocab.index("<|assistant|>")]
+        assert tokenizer.eos_token == "<|end_of_text|>"
+
+    def test_pruned_moe_gguf_serves_on_splash_1_4_1(
+        self, tmp_path, monkeypatch, launchers, write_gguf
+    ):
+        vocab = sorted(pre_tokenizers.ByteLevel.alphabet()) + ["<|im_end|>"]
+        family = splash_mod.SPLASH_FAMILIES["Qwen3.8-Flash-Next"]
+        monkeypatch.setitem(family, "vocab_size", len(vocab))
+
+        def flash_next(experts: int) -> dict:
+            return {
+                "general.architecture": "qwen4exp",
+                "qwen4exp.block_count": 48,
+                "qwen4exp.context_length": 262144,
+                "qwen4exp.embedding_length": 2560,
+                "qwen4exp.attention.head_count": 24,
+                "qwen4exp.attention.head_count_kv": 2,
+                "qwen4exp.attention.key_length": 256,
+                "qwen4exp.full_attention_interval": 4,
+                "qwen4exp.expert_count": experts,
+                "qwen4exp.expert_used_count": 10,
+                "tokenizer.ggml.model": "gpt2",
+                "tokenizer.ggml.pre": "qwen35",
+                "tokenizer.ggml.tokens": vocab,
+                "tokenizer.ggml.token_type": [1] * (len(vocab) - 1) + [3],
+                "tokenizer.ggml.merges": [],
+            }
+
+        # ISTA's Coder release keeps 256 of Flash-Next's 512 routed experts,
+        # split in its variant's folder.
+        repo = tmp_path / "models" / "ISTA-DASLab" / "Flash-Next-Coder-GGUF"
+        name = "Flash-Next-Coder-IQ1_M"
+        write_gguf(repo / "IQ1_M" / f"{name}-00001-of-00002.gguf", flash_next(256))
+        write_gguf(repo / "IQ1_M" / f"{name}-00002-of-00002.gguf", {})
+        write_gguf(repo / "Flash-Next-Odd-Q2_0.gguf", flash_next(260))
+        draft = _write_draft(
+            tmp_path / "draft", {**FLASH_NEXT_TEXT, "vocab_size": len(vocab)}
+        )
+        models = discover_models(tmp_path / "models", tmp_path / "gguf")
+        pruned = models[name].model_path
+        odd = models["Flash-Next-Odd-Q2_0"].model_path
+
+        launchers("splash", version="1.4.0")
+        assert resolve_splash_target(pruned, None, [str(draft)]) == (
+            None,
+            "GGUFs pruned to fewer routed experts need Splash 1.4.1 or later",
+        )
+        launchers("splash", version="1.4.1")
+        target, reason = resolve_splash_target(pruned, None, [str(draft)])
+        assert reason == ""
+        assert target.family == "Qwen3.8-Flash-Next"
+        _, reason = resolve_splash_target(odd, None, [str(draft)])
+        assert reason == (
+            "Splash serves Qwen3.8-Flash-Next GGUFs with a multiple of 8 routed "
+            "experts up to 512, not 260"
+        )
 
 
 class TestStaging:
