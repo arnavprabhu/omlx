@@ -144,8 +144,7 @@ THINKING_BUDGET_VERSION = (1, 3, 2)
 NVIDIA_QUANTIZATION_VERSION = (1, 3, 2)
 FLASH_NEXT_VERSION = (1, 4, 0)
 SPLIT_GGUF_VERSION = (1, 4, 0)
-# Splash 1.4.1 serves MoE GGUFs pruned to fewer routed experts than their
-# family's, as many as a multiple of this, which Splash checks further.
+# Splash 1.4.1 serves MoE GGUFs pruned to a multiple of 8 routed experts.
 PRUNED_EXPERTS_VERSION = (1, 4, 1)
 _PRUNED_EXPERTS_MULTIPLE = 8
 _MODELOPT_ALGOS = frozenset({"NVFP4", "W4A16_NVFP4", "FP8"})
